@@ -53,7 +53,7 @@ def remove_row(table, row):
 
 # ================= 2. 核心排版引擎 =================
 def generate_docx(data):
-    doc = Document("TDS 模板.docx")
+    doc = Document("听涛智能系统/TDS 模板.docx")
     processed_features = False
     processed_apps = False
     processed_props = False
