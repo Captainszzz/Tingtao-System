@@ -12,7 +12,7 @@ from docx.oxml import OxmlElement
 import io
 
 # ================= 0. 🔑 在这里焊死你的 API Key =================
-MY_API_KEY = "AIzaSyA05yjqA7FvipuiW-Ca871moAdNPmmjcy8"
+MY_API_KEY = st.secrets["MY_API_KEY"]
 
 # ================= 1. Word 排版辅助函数 =================
 def split_cn_en(text):
