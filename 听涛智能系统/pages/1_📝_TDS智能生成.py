@@ -195,7 +195,7 @@ if st.button("✨ 一键识别并生成 TDS", type="primary"):
                 """
                 
                 response = client.models.generate_content(
-                    model='gemini-1.5-flash',
+                    model='gemini-2.0-flash',
                     contents=[prompt, gemini_file]
                 )
                 
