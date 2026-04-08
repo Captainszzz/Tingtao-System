@@ -53,7 +53,7 @@ def remove_row(table, row):
 
 # ================= 2. 核心排版引擎 =================
 def generate_docx(data):
-    doc = Document("听涛智能系统/TDS 模板.docx")
+    doc = Document("TDS 模板.docx")
     processed_features = False
     processed_apps = False
     processed_props = False
@@ -195,7 +195,7 @@ if st.button("✨ 一键识别并生成 TDS", type="primary"):
                 """
                 
                 response = client.models.generate_content(
-                    model='gemini-3-flash-preview',
+                    model='gemini-1.5-flash',
                     contents=[prompt, gemini_file]
                 )
                 
