@@ -153,9 +153,9 @@ def generate_docx(data):
     return target_stream.getvalue()
 
 # ================= 3. 网页界面与 AI 通信 =================
-st.set_page_config(page_title="听涛 TDS 智能生成 (通义千问版)", page_icon="📝")
+st.set_page_config(page_title="听涛 TDS 智能生成", page_icon="📝")
 st.title("🚀 听涛新材料 - 全能 TDS 提取系统")
-st.markdown("上传原厂资料，**支持图片、PDF、Word、Excel**，阿里云大模型将自动阅读并生成标准 Word 文档。")
+st.markdown("上传原厂资料，**支持图片、PDF、Word、Excel**，将自动阅读并生成标准 Word 文档。")
 
 uploaded_file = st.file_uploader("📥 请上传原厂物料文件", type=['png', 'jpg', 'jpeg', 'pdf', 'docx', 'xlsx'])
 
@@ -164,7 +164,7 @@ if st.button("✨ 一键识别并生成 TDS", type="primary"):
         st.error("❌ 请先上传文件哦！")
     else:
         try:
-            with st.spinner(f"🧠 正在上传解析【{uploaded_file.name}】，通义千问阅读可能需要几十秒..."):
+            with st.spinner(f"🧠 正在上传解析【{uploaded_file.name}】，阅读提取可能需要几十秒..."):
                 
                 client = OpenAI(
                     api_key=MY_API_KEY,
@@ -243,7 +243,7 @@ if st.button("✨ 一键识别并生成 TDS", type="primary"):
             st.success("🎉 TDS 生成完毕！请点击下方按钮下载。")
             safe_name = str(data.get('ProductName', '新物料')).replace('/', '_')
             st.download_button(
-                label="📥 下载 Word 文档",
+                label="📥 下载 Word 文档，建议手动微调",
                 data=docx_bytes,
                 file_name=f"听涛TDS_{safe_name}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
