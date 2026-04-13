@@ -1,5 +1,5 @@
 import streamlit as st
-from google import genai
+from openai import OpenAI
 import json
 import re
 import os
@@ -52,9 +52,8 @@ def format_cell_text(cell, text, is_header=False, is_property_col=False, align_l
 def remove_row(table, row):
     table._tbl.remove(row._tr)
 
-# ================= 2. 核心排版引擎 (加入路径自适应) =================
+# ================= 2. 核心排版引擎 =================
 def generate_docx(data):
-    # 【核心优化 1】自适应寻找 Word 模板路径
     template_name = "TDS 模板.docx"
     cloud_path = f"听涛智能系统/{template_name}"
     
@@ -154,9 +153,9 @@ def generate_docx(data):
     return target_stream.getvalue()
 
 # ================= 3. 网页界面与 AI 通信 =================
-st.set_page_config(page_title="听涛 TDS 智能生成", page_icon="📝")
+st.set_page_config(page_title="听涛 TDS 智能生成 (通义千问版)", page_icon="📝")
 st.title("🚀 听涛新材料 - 全能 TDS 提取系统")
-st.markdown("上传原厂资料，**支持图片、PDF、Word、Excel**，AI 将自动阅读并生成标准 Word 文档。")
+st.markdown("上传原厂资料，**支持图片、PDF、Word、Excel**，阿里云大模型将自动阅读并生成标准 Word 文档。")
 
 uploaded_file = st.file_uploader("📥 请上传原厂物料文件", type=['png', 'jpg', 'jpeg', 'pdf', 'docx', 'xlsx'])
 
@@ -165,24 +164,29 @@ if st.button("✨ 一键识别并生成 TDS", type="primary"):
         st.error("❌ 请先上传文件哦！")
     else:
         try:
-            with st.spinner(f"🧠 正在上传解析【{uploaded_file.name}】，AI 阅读可能需要几十秒..."):
-                client = genai.Client(api_key=MY_API_KEY)
+            with st.spinner(f"🧠 正在上传解析【{uploaded_file.name}】，通义千问阅读可能需要几十秒..."):
                 
-                # 【核心优化 2】使用 tempfile 模块安全处理临时文件，彻底告别 Errno 2
+                client = OpenAI(
+                    api_key=MY_API_KEY,
+                    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
+                )
+                
                 file_ext = os.path.splitext(uploaded_file.name)[1]
                 with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
                     tmp_file.write(uploaded_file.getbuffer())
                     temp_file_path = tmp_file.name
                 
-                gemini_file = client.files.upload(file=temp_file_path)
+                with open(temp_file_path, "rb") as f:
+                    file_object = client.files.create(file=f, purpose="file-extract")
 
                 prompt = """
                 你是一个专业的数据提取员兼材料学翻译专家。请仔细阅读我上传的文件资料，提取其中的塑料物性表数据，并严格输出为以下的 JSON 格式。
                 
-                【💡 核心提取与翻译规则（非常重要）】：
-                1. 对于 `TypicalProperties` 中的 `Property` 字段：必须强制输出【中文 + 空格 + 英文】的对照格式（例如："拉伸强度 Tensile Strength"）。
-                2. 对于 `Features` (特性) 和 `Applications` (应用)：无论原文件是纯中文还是纯英文，你也必须强制输出【中文 + 空格 + 英文】的对照格式（例如："优异的耐热性 Excellent heat resistance"）。原文件缺失的语言请你自动翻译并补齐。
-                3. 不要回复任何其他说明文字，也不要包含 ```json 标签。
+                【💡 核心提取规则（非常重要）】：
+                1. 必须且只能从上传的文件中提取数据，绝对不允许自己编造、猜测或联想任何数据！
+                2. 对于 `TypicalProperties` 中的 `Property` 字段：必须强制输出【中文 + 空格 + 英文】的对照格式（例如："拉伸强度 Tensile Strength"）。
+                3. 对于 `Features` (特性) 和 `Applications` (应用)：也必须强制输出中英对照格式。如果文件中没有提到特性或应用，请留空，不要编造！
+                4. 不要回复任何其他说明文字，也不要包含 ```json 标签。
                 
                 输出格式模板：
                 {
@@ -190,7 +194,7 @@ if st.button("✨ 一键识别并生成 TDS", type="primary"):
                   "Features": ["优异的耐热性 Excellent heat resistance", "高流动性 High flowability"],
                   "Applications": ["汽车零部件 Automotive parts", "电子电器外壳 Electrical enclosures"],
                   "TypicalProperties": [
-                    {"Property": "拉伸强度 Tensile Strength", "TestMethod": "ASTM D638", "Value": "60", "Unit": "MPa"}
+                    {"Property": "拉伸强度 Tensile Strength", "TestMethod": "ISO 527", "Value": "60", "Unit": "MPa"}
                   ],
                   "ProcessingGuide": {
                     "MeltTemp": "240-270 °C",
@@ -199,26 +203,39 @@ if st.button("✨ 一键识别并生成 TDS", type="primary"):
                 }
                 """
                 
-                # 【核心优化 3】换用目前绝对存在的畅通模型
-                response = client.models.generate_content(
-                    model='gemini-2.0-flash',
-                    contents=[prompt, gemini_file]
+                # =========================================================================
+                # 【终极修复区】：阿里云专属通道，文件 ID 必须且只能放在 "system" 角色里！
+                # =========================================================================
+                response = client.chat.completions.create(
+                    model="qwen-long", 
+                    messages=[
+                        {"role": "system", "content": f"fileid://{file_object.id}"},  # 👈 修复在这里：变成了 system
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": "请严格按照 system 提示词的要求，读取上述内部系统文件，提取真实的物性表数据。绝不允许自己编造！"}
+                    ]
                 )
                 
-                # 阅后即焚清理工作
-                os.remove(temp_file_path)
-                try:
-                    client.files.delete(name=gemini_file.name)
-                except:
-                    pass
+                result_text = response.choices[0].message.content
                 
-                result_text = response.text
-                if "```json" in result_text:
-                    result_text = result_text.split("```json")[1].split("```")[0].strip()
-                elif "```" in result_text:
-                    result_text = result_text.split("```")[1].split("```")[0].strip()
+                clean_text = result_text
+                if "```json" in clean_text:
+                    clean_text = clean_text.split("```json")[1].split("```")[0].strip()
+                elif "```" in clean_text:
+                    clean_text = clean_text.split("```")[1].split("```")[0].strip()
                     
-                data = json.loads(result_text)
+                try:
+                    data = json.loads(clean_text)
+                except Exception as e:
+                    try: os.remove(temp_file_path) 
+                    except: pass
+                    st.error("❌ AI 返回的数据格式不标准，Word 生成失败！")
+                    st.info(f"🕵️ 抓包看看 AI 到底说了什么：\n\n{result_text}")
+                    st.stop()
+                
+                try: os.remove(temp_file_path)
+                except: pass
+                try: client.files.delete(file_object.id)
+                except: pass
                 
             with st.spinner("📝 数据提取成功！正在生成完美排版的文档..."):
                 docx_bytes = generate_docx(data)
@@ -233,14 +250,7 @@ if st.button("✨ 一键识别并生成 TDS", type="primary"):
             )
             
         except Exception as e:
-            error_msg = str(e)
-            if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-                st.warning("⚠️ 谷歌 API 请求频率超限啦！请稍微休息 1 分钟后再点一次。")
-            elif "503" in error_msg or "UNAVAILABLE" in error_msg:
-                st.warning("⚠️ 谷歌免费服务器目前正在排队大塞车，请喝口水稍后再试一次！")
-            else:
-                st.error(f"❌ 运行过程中出现错误：{e}")
-            
-            # 确保报错时也能清理掉垃圾文件
+            st.error(f"❌ 运行过程中出现错误：{e}")
             if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
+                try: os.remove(temp_file_path)
+                except: pass

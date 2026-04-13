@@ -3,24 +3,37 @@ import requests
 from datetime import datetime
 
 # ==========================================
-# 1. 全局配置与数据字典 (基于真实账单)
+# 1. 全局配置与数据字典 (多港口自适应矩阵)
 # ==========================================
 st.set_page_config(page_title="听涛智能报价系统", page_icon="🌊", layout="wide")
 
-POL_FEES_USD = {
-    "fixed_per_bl": 70 + 30 + 55 + 20 + 25 + 55,  # 文件/报关/提单/EDI/封条/操作 = 255 USD
-    "20GP": {"THC": 105, "Booking": 20}, # 125 USD
-    "40GP": {"THC": 165, "Booking": 20}, # 185 USD 
-    "40HQ": {"THC": 165, "Booking": 20}  # 185 USD 
+# 🚢 多港口起运杂费矩阵 (POL_FEES_MATRIX)
+POL_FEES_MATRIX = {
+    "厦门/深圳 (按USD一级货代标准)": {
+        "currency": "USD",
+        "fixed_per_bl": 70 + 30 + 55 + 20 + 25 + 55,  # 255 USD (文件/报关/提单/EDI/封条/操作)
+        "20GP": {"THC": 105, "Booking": 20}, 
+        "40GP": {"THC": 165, "Booking": 20}, 
+        "40HQ": {"THC": 165, "Booking": 20}  
+    },
+    "钦州/西南 (按RMB实报实销标准)": {
+        "currency": "RMB",
+        "fixed_per_bl": 500 + 60 + 50 + 600, # 1210 RMB (DOC 500 + 封条 60 + EIR 50 + 报关舱单 600)
+        "20GP": {"THC": 850, "Heavy_Terminal": 800},   # 估算值
+        "40GP": {"THC": 1250, "Heavy_Terminal": 1000}, # 1000 为重柜港杂
+        "40HQ": {"THC": 1250, "Heavy_Terminal": 1000}  
+    }
 }
 
+# 🇻🇳 越南目的港标准杂费 (USD)
 POD_FEES_USD = {
-    "fixed_per_do": 48 + 40, # D/O + 操作费 = 88 USD
+    "fixed_per_do": 48 + 40, # D/O 48 + 操作费 40 = 88 USD
     "20GP": {"THC": 140, "CIC": 65, "EMS": 25, "Cleaning": 15}, # 245 USD
     "40GP": {"THC": 222, "CIC": 130, "EMS": 35, "Cleaning": 25}, # 412 USD
     "40HQ": {"THC": 222, "CIC": 130, "EMS": 35, "Cleaning": 25}  # 412 USD
 }
 
+# 🇻🇳 越南仓配标准 (VND)
 WAREHOUSE_RATES = {
     "storage_per_ton_day": 5200,      
     "handling_pallet": 68000,         
@@ -36,7 +49,7 @@ def fetch_exchange_rates():
         data = requests.get("https://api.exchangerate-api.com/v4/latest/CNY", timeout=5).json()
         return {"CNY_USD": data["rates"]["USD"], "CNY_VND": data["rates"]["VND"]}
     except:
-        return {"CNY_USD": 0.1385, "CNY_VND": 3460}
+        return {"CNY_USD": 0.1448, "CNY_VND": 3460} # 默认防崩溃汇率
 
 rates = fetch_exchange_rates()
 
@@ -45,7 +58,7 @@ with st.sidebar:
     exchange_buffer = st.slider("汇率安全垫 (%)", 0.0, 5.0, 1.5) / 100
     effective_usd_rate = rates["CNY_USD"] * (1 - exchange_buffer)
     effective_vnd_rate = rates["CNY_VND"] * (1 - exchange_buffer)
-    st.info(f"**实际结算汇率:**\n\n1 CNY = {effective_usd_rate:.4f} USD\n\n1 CNY = {effective_vnd_rate:.0f} VND")
+    st.info(f"**实际结算汇率 (已扣安全垫):**\n\n1 CNY = {effective_usd_rate:.4f} USD\n\n1 CNY = {effective_vnd_rate:.0f} VND")
     
     st.divider()
     st.markdown("### 商业利润")
@@ -67,8 +80,9 @@ with st.expander("📦 A. 货物基础参数 (展开/折叠)", expanded=True):
     with c3:
         packing = st.selectbox("包装方式", ["托盘装 (1吨/托)", "散包 (25kg/包)"])
     with c4:
-        tonnage = st.number_input("总重量 (吨)", value=25.0)
+        tonnage = st.number_input("总重量 (吨)", value=27.0) # 默认设为27吨重柜标准
 
+    # 退税后底线成本
     cost_per_ton_rmb = price_rmb_tax - (price_rmb_tax / 1.13 * (rebate_rate/100))
     
     st.markdown("### 💰 资金与账期成本设定")
@@ -86,7 +100,6 @@ with st.expander("📦 A. 货物基础参数 (展开/折叠)", expanded=True):
     
     months = int(payment_terms[0])
     capital_rate = 0.5 + (months * 0.8)
-    
     total_capital_cost_rmb = (price_rmb_tax * tonnage) * (capital_rate / 100)
     total_capital_cost_usd = total_capital_cost_rmb * effective_usd_rate
     
@@ -95,31 +108,47 @@ with st.expander("📦 A. 货物基础参数 (展开/折叠)", expanded=True):
                    f"💴 预计单票垫资利息: **¥{total_capital_cost_rmb:,.0f}** (约 **${total_capital_cost_usd:,.0f}**)")
 
 # --- 模块 B: 海运及中国起运港 ---
-st.subheader("B. 中国境内物流与跨国海运 (China EXW ➔ Ocean Freight)")
+st.subheader("B. 中国起运段 (China EXW ➔ Ocean Freight)")
 
-st.markdown("🚚 **第一段：中国境内物流**")
-domestic_trucking_rmb = st.number_input("中国境内拖车费 (国内仓库 ➔ 起运港, RMB/柜或票)", value=1200.0, step=100.0)
+st.markdown("🚚 **1. 中国境内拖车**")
+domestic_trucking_rmb = st.number_input("工厂/仓库 ➔ 起运港拖车费 (RMB/车)", value=1050.0, step=50.0)
 domestic_trucking_usd = domestic_trucking_rmb * effective_usd_rate
 
-st.markdown("🚢 **第二段：起运港杂费与海运费**")
+st.markdown("🚢 **2. 起运港选择与海运费**")
+selected_pol = st.selectbox("⚓ 选择中国起运港口计费模型", list(POL_FEES_MATRIX.keys()))
+pol_data = POL_FEES_MATRIX[selected_pol]
+currency = pol_data["currency"]
+
 mode = st.radio("运输模式", ["整柜 (FCL)", "散货 (LCL)"], horizontal=True)
 
 total_pol_usd = 0.0
 ocean_freight_usd = 0.0
 
 if mode == "整柜 (FCL)":
-    l1, l2, l3 = st.columns(3)
+    l1, l2, l3, l4 = st.columns(4)
     with l1:
-        ctype = st.selectbox("选择柜型", ["20GP", "40GP", "40HQ"])
+        ctype = st.selectbox("选择柜型", ["20GP", "40GP", "40HQ"], index=2)
     with l2:
-        ocean_freight_usd = st.number_input("海运费 O/F (USD/柜)", value=850.0, step=50.0)
+        ocean_freight_usd = st.number_input("海运费 O/F (USD/柜)", value=300.0, step=50.0)
     with l3:
-        has_inspect = st.checkbox("需海关查验 (操作费 +$60)", value=False)
+        has_inspect = st.checkbox("需海关查验", value=False)
+    with l4:
+        is_telex = st.checkbox("要求电放 (Telex Release)", value=True)
     
-    pol_fixed = POL_FEES_USD["fixed_per_bl"]
-    pol_variable = sum(POL_FEES_USD[ctype].values())
-    total_pol_usd = pol_fixed + pol_variable + (60 if has_inspect else 0)
-    st.caption(f"*(系统已匹配港口杂费: ${total_pol_usd})*")
+    pol_fixed = pol_data["fixed_per_bl"]
+    pol_variable = sum(pol_data[ctype].values())
+    
+    if currency == "RMB":
+        telex_fee_rmb = 450 if is_telex else 0
+        inspect_fee_rmb = 600 if has_inspect else 0
+        total_pol_rmb = pol_fixed + pol_variable + telex_fee_rmb + inspect_fee_rmb
+        total_pol_usd = total_pol_rmb * effective_usd_rate
+        st.info(f"📍 **{selected_pol} 杂费 (RMB):** 固定杂费(含报关) ¥{pol_fixed} + 柜型杂费(THC等) ¥{pol_variable} + 电放 ¥{telex_fee_rmb} = **¥{total_pol_rmb}** (折合 **${total_pol_usd:.2f}**)")
+    else:
+        telex_fee_usd = 50 if is_telex else 0
+        inspect_fee_usd = 60 if has_inspect else 0
+        total_pol_usd = pol_fixed + pol_variable + telex_fee_usd + inspect_fee_usd
+        st.info(f"📍 **{selected_pol} 杂费 (USD):** 固定杂费(含报关) ${pol_fixed} + 柜型杂费(THC等) ${pol_variable} + 电放 ${telex_fee_usd} = **${total_pol_usd:.2f}**")
 
 else:
     l1, l2, l3 = st.columns(3)
@@ -135,7 +164,7 @@ else:
     total_pol_usd = pol_lcl_fixed_usd
 
 # --- 模块 C: 越南目的港与仓配 ---
-st.subheader("C. 越南本地费用与仓储 (Vietnam POD & Warehousing)")
+st.subheader("C. 越南目的段 (Vietnam POD & Local Services)")
 
 if mode == "整柜 (FCL)":
     pod_fixed = POD_FEES_USD["fixed_per_do"]
@@ -144,30 +173,28 @@ if mode == "整柜 (FCL)":
 else:
     pod_local_fees_usd = st.number_input("散货目的港杂费 (USD/票)", value=80.0)
 
+# 目的港杂费转换为VND并加收8%当地增值税
 pod_fees_vnd_no_tax = pod_local_fees_usd * (effective_vnd_rate / effective_usd_rate)
 pod_fees_vat_vnd = pod_fees_vnd_no_tax * 0.08
 
 d1, d2, d3, d4 = st.columns(4)
 with d1:
-    import_tax = st.number_input("进口关税 (%)", value=0.0)
+    import_tax = st.number_input("货物进口关税 (%)", value=0.0)
 with d2:
-    # 🌟 修改点 1：默认值从 8.0 改为 0.0
-    import_vat = st.number_input("货物进口增值税 (%)", value=0.0)
+    import_vat = st.number_input("货物进口增值税 (%)", value=0.0, help="根据客户要求选填，默认0")
 with d3:
-    # 🌟 修改点 2：默认值从 1000000 改为 0
-    customs_tip_vnd = st.number_input("海关查验/小费 (VND)", value=0, step=500000)
+    customs_tip_vnd = st.number_input("海关特殊处理/小费 (VND)", value=0, step=500000)
 with d4:
-    delivery_truck_usd = st.number_input("港口-仓库拖车费用 (USD)", value=107.0)
+    delivery_truck_usd = st.number_input("第一段: 港口 ➔ 仓库拖车 (USD)", value=107.0)
 
-st.markdown("🏢 **海外仓配与末端派送**")
+st.markdown("🏢 **海外仓储与末端派送**")
 w1, w2, w3 = st.columns(3)
 with w1:
     needs_warehousing = st.checkbox("✔️ 货物需进入本地仓储转运", value=True)
 with w2:
-    storage_days = st.number_input("预计存储天数", value=7, min_value=0) if needs_warehousing else 0
+    storage_days = st.number_input("预计仓储天数", value=7, min_value=0) if needs_warehousing else 0
 with w3:
-    # 🌟 修改点 3：默认值从 2000000 改为 0
-    vn_delivery_to_client_vnd = st.number_input("越南本土运费 (仓库-客户, VND)", value=0, step=500000)
+    vn_delivery_to_client_vnd = st.number_input("第二段: 仓库 ➔ 客户本土派送 (VND)", value=0, step=500000)
 
 warehouse_total_vnd = 0
 if needs_warehousing:
@@ -186,11 +213,10 @@ if st.button("🚀 一键生成精准报价表", use_container_width=True, type=
     # 1. 货值计算
     total_goods_cost_usd = (cost_per_ton_rmb * tonnage) * effective_usd_rate
     
-    # 2. CIF 计算 
+    # 2. CIF 计算 (全链路前段成本 + 资金垫资)
     insurance_rate = 0.0008 
     total_cif_usd = (total_goods_cost_usd + domestic_trucking_usd + total_pol_usd + ocean_freight_usd + total_capital_cost_usd) / (1 - (insurance_rate * 1.1))
     
-    # 利润加成
     cif_quote_total_usd = total_cif_usd * (1 + profit_margin/100) * (1 + loss_rate/100)
     cif_quote_per_ton = cif_quote_total_usd / tonnage
 
@@ -202,15 +228,16 @@ if st.button("🚀 一键生成精准报价表", use_container_width=True, type=
     vat_on_goods_vnd = (cif_vnd + duty_vnd) * (import_vat / 100)
     
     local_delivery_port_to_wh_vnd = delivery_truck_usd * usd_to_vnd
+    # 越南总杂费 = 港区操作费 + 服务增值税 + 小费 + 仓储(含上下车) + 两段派送拖车
     total_pod_costs_vnd = pod_fees_vnd_no_tax + pod_fees_vat_vnd + customs_tip_vnd + warehouse_total_vnd + local_delivery_port_to_wh_vnd + vn_delivery_to_client_vnd
     
-    # 最终 DDP
+    # 最终 DDP 总计
     total_ddp_cost_vnd = cif_vnd + duty_vnd + vat_on_goods_vnd + total_pod_costs_vnd
     ddp_quote_total_vnd = total_ddp_cost_vnd * (1 + profit_margin/100) * (1 + loss_rate/100)
     ddp_quote_per_kg = ddp_quote_total_vnd / (tonnage * 1000)
 
-    # 结果展示
-    st.success("✅ 数据核算完毕！中国境内物流费已计入总成本。")
+    # ================= 结果展示区 =================
+    st.success("✅ 数据核算完毕！全链路费用与自定义税费已精准并入总成本。")
     
     res1, res2 = st.columns(2)
     with res1:
@@ -219,19 +246,19 @@ if st.button("🚀 一键生成精准报价表", use_container_width=True, type=
         st.markdown(f"**总价:** `${cif_quote_total_usd:,.2f}`")
         
     with res2:
-        st.success("### 方案 B: DDP 含本地派送 (VND/KG)")
+        st.success("### 方案 B: DDP 越南-到厂 (VND/KG)")
         st.metric(label="DDP 报价单价", value=f"₫ {ddp_quote_per_kg:,.0f}")
         st.markdown(f"**总价:** `₫ {ddp_quote_total_vnd:,.0f}`")
         
     st.markdown("---")
-    st.markdown("### 📊 全链路成本透视 (内部参考)")
+    st.markdown("### 📊 全链路成本透视 (供内部核算对账)")
     col_t1, col_t2, col_t3, col_t4 = st.columns(4)
     
     col_t1.metric("1. 基础货值与垫资利息", f"₫ {cif_vnd:,.0f}")
-    col_t2.metric("2. 中国起运段 (拖车+港杂+海运)", f"${(domestic_trucking_usd + total_pol_usd + ocean_freight_usd):,.0f}")
+    col_t2.metric("2. 中国起运段总计", f"${(domestic_trucking_usd + total_pol_usd + ocean_freight_usd):,.2f}")
     col_t3.metric("3. 越南落地与税费总计", f"₫ {(duty_vnd + vat_on_goods_vnd + total_pod_costs_vnd):,.0f}")
-    col_t4.metric("4. 单票占用资金利息", f"₫ {(total_capital_cost_usd * usd_to_vnd):,.0f}")
+    col_t4.metric("4. 本票单次资金利息成本", f"₫ {(total_capital_cost_usd * usd_to_vnd):,.0f}")
 
     st.caption(f"🔧 **物流链路拆解：** \n"
-               f"🇨🇳 中国段：工厂提货(¥{domestic_trucking_rmb}) + 起运港杂费(${total_pol_usd}) + 海运(${ocean_freight_usd}) \n"
-               f"🇻🇳 越南段：目的港杂费及小费 + 仓储(₫{warehouse_total_vnd:,.0f}) + 港口到仓 + 仓到客户派送(₫{vn_delivery_to_client_vnd:,.0f})")
+               f"🇨🇳 **中国段 (¥/${{}})：** 工厂提货 (¥{domestic_trucking_rmb}) ➔ {selected_pol}起运杂费 (${total_pol_usd:.0f}) ➔ 海运费 (${ocean_freight_usd}) \n\n"
+               f"🇻🇳 **越南段 (₫)：** 目的港杂费含税 (₫{(pod_fees_vnd_no_tax + pod_fees_vat_vnd):,.0f}) + 仓储装卸 (₫{warehouse_total_vnd:,.0f}) + 港到仓拖车 + 仓到门派送 (₫{vn_delivery_to_client_vnd:,.0f}) + 海关小费 (₫{customs_tip_vnd:,.0f})")
