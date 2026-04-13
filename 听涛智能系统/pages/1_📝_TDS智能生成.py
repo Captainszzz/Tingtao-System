@@ -155,7 +155,7 @@ def generate_docx(data):
 # ================= 3. 网页界面与 AI 通信 =================
 st.set_page_config(page_title="听涛 TDS 智能生成", page_icon="📝")
 st.title("🚀 听涛新材料 - 全能 TDS 提取系统")
-st.markdown("上传原厂资料，**支持图片、PDF、Word、Excel**，将自动阅读并生成 听涛TDS-Word文档。")
+st.markdown("上传原厂资料，**支持图片、PDF、Word、Excel**，将自动生成 听涛TDS-Word文档。")
 
 uploaded_file = st.file_uploader("📥 请上传原厂物料文件", type=['png', 'jpg', 'jpeg', 'pdf', 'docx', 'xlsx'])
 
@@ -164,7 +164,7 @@ if st.button("✨ 一键识别并生成 TDS", type="primary"):
         st.error("❌ 请先上传文件哦！")
     else:
         try:
-            with st.spinner(f"🧠 正在上传解析【{uploaded_file.name}】，阅读提取可能需要几十秒..."):
+            with st.spinner(f"🧠 正在上传解析【{uploaded_file.name}】，阅读提取可能需要几十秒，请喝水..."):
                 
                 client = OpenAI(
                     api_key=MY_API_KEY,
