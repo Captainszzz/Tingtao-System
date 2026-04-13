@@ -3,6 +3,7 @@ from google import genai
 import json
 import re
 import os
+import tempfile
 from docx import Document
 from docx.shared import Pt, RGBColor
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
@@ -51,9 +52,19 @@ def format_cell_text(cell, text, is_header=False, is_property_col=False, align_l
 def remove_row(table, row):
     table._tbl.remove(row._tr)
 
-# ================= 2. 核心排版引擎 =================
+# ================= 2. 核心排版引擎 (加入路径自适应) =================
 def generate_docx(data):
-    doc = Document("TDS 模板.docx")
+    # 【核心优化 1】自适应寻找 Word 模板路径
+    template_name = "TDS 模板.docx"
+    cloud_path = f"听涛智能系统/{template_name}"
+    
+    if os.path.exists(cloud_path):
+        doc = Document(cloud_path)
+    elif os.path.exists(template_name):
+        doc = Document(template_name)
+    else:
+        raise FileNotFoundError("找不到 Word 模板文件，请确保 'TDS 模板.docx' 和代码在同一个项目内！")
+
     processed_features = False
     processed_apps = False
     processed_props = False
@@ -150,27 +161,21 @@ st.markdown("上传原厂资料，**支持图片、PDF、Word、Excel**，AI 将
 uploaded_file = st.file_uploader("📥 请上传原厂物料文件", type=['png', 'jpg', 'jpeg', 'pdf', 'docx', 'xlsx'])
 
 if st.button("✨ 一键识别并生成 TDS", type="primary"):
-    if MY_API_KEY == "在这里填入你的真实API_KEY":
-        st.error("❌ 哎呀，你忘记在代码里填入真实的 API Key 了！请打开 web_tds.py 修改第 15 行。")
-    elif not uploaded_file:
+    if not uploaded_file:
         st.error("❌ 请先上传文件哦！")
     else:
         try:
             with st.spinner(f"🧠 正在上传解析【{uploaded_file.name}】，AI 阅读可能需要几十秒..."):
                 client = genai.Client(api_key=MY_API_KEY)
                 
-                # 修复中文名报错：强制给临时文件穿上“纯英文马甲”
+                # 【核心优化 2】使用 tempfile 模块安全处理临时文件，彻底告别 Errno 2
                 file_ext = os.path.splitext(uploaded_file.name)[1]
-                temp_file_path = f"temp_ai_upload_file{file_ext}"
-                
-                with open(temp_file_path, "wb") as f:
-                    f.write(uploaded_file.getbuffer())
+                with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
+                    tmp_file.write(uploaded_file.getbuffer())
+                    temp_file_path = tmp_file.name
                 
                 gemini_file = client.files.upload(file=temp_file_path)
 
-                # ==========================================
-                # 终极版 Prompt：特性和应用也强制输出中英双语
-                # ==========================================
                 prompt = """
                 你是一个专业的数据提取员兼材料学翻译专家。请仔细阅读我上传的文件资料，提取其中的塑料物性表数据，并严格输出为以下的 JSON 格式。
                 
@@ -194,11 +199,13 @@ if st.button("✨ 一键识别并生成 TDS", type="primary"):
                 }
                 """
                 
+                # 【核心优化 3】换用目前绝对存在的畅通模型
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-2.0-flash',
                     contents=[prompt, gemini_file]
                 )
                 
+                # 阅后即焚清理工作
                 os.remove(temp_file_path)
                 try:
                     client.files.delete(name=gemini_file.name)
@@ -226,6 +233,14 @@ if st.button("✨ 一键识别并生成 TDS", type="primary"):
             )
             
         except Exception as e:
-            st.error(f"❌ 运行过程中出现错误：{e}")
+            error_msg = str(e)
+            if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+                st.warning("⚠️ 谷歌 API 请求频率超限啦！请稍微休息 1 分钟后再点一次。")
+            elif "503" in error_msg or "UNAVAILABLE" in error_msg:
+                st.warning("⚠️ 谷歌免费服务器目前正在排队大塞车，请喝口水稍后再试一次！")
+            else:
+                st.error(f"❌ 运行过程中出现错误：{e}")
+            
+            # 确保报错时也能清理掉垃圾文件
             if 'temp_file_path' in locals() and os.path.exists(temp_file_path):
                 os.remove(temp_file_path)

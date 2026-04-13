@@ -9,9 +9,9 @@ st.set_page_config(page_title="听涛智能报价系统", page_icon="🌊", layo
 
 POL_FEES_USD = {
     "fixed_per_bl": 70 + 30 + 55 + 20 + 25 + 55,  # 文件/报关/提单/EDI/封条/操作 = 255 USD
-    "20GP": {"THC": 105, "Booking": 20, "Trucking": 105}, # 230 USD
-    "40GP": {"THC": 165, "Booking": 20, "Trucking": 210}, # 395 USD
-    "40HQ": {"THC": 165, "Booking": 20, "Trucking": 210}  # 395 USD
+    "20GP": {"THC": 105, "Booking": 20}, # 125 USD
+    "40GP": {"THC": 165, "Booking": 20}, # 185 USD 
+    "40HQ": {"THC": 165, "Booking": 20}  # 185 USD 
 }
 
 POD_FEES_USD = {
@@ -69,10 +69,8 @@ with st.expander("📦 A. 货物基础参数 (展开/折叠)", expanded=True):
     with c4:
         tonnage = st.number_input("总重量 (吨)", value=25.0)
 
-    # 实际采购成本 (扣除退税)
     cost_per_ton_rmb = price_rmb_tax - (price_rmb_tax / 1.13 * (rebate_rate/100))
     
-    # 资金成本引擎
     st.markdown("### 💰 资金与账期成本设定")
     cc1, cc2 = st.columns([2, 2])
     with cc1:
@@ -97,7 +95,13 @@ with st.expander("📦 A. 货物基础参数 (展开/折叠)", expanded=True):
                    f"💴 预计单票垫资利息: **¥{total_capital_cost_rmb:,.0f}** (约 **${total_capital_cost_usd:,.0f}**)")
 
 # --- 模块 B: 海运及中国起运港 ---
-st.subheader("B. 跨国海运与 POL 费用 (China EXW/FOB)")
+st.subheader("B. 中国境内物流与跨国海运 (China EXW ➔ Ocean Freight)")
+
+st.markdown("🚚 **第一段：中国境内物流**")
+domestic_trucking_rmb = st.number_input("中国境内拖车费 (国内仓库 ➔ 起运港, RMB/柜或票)", value=1200.0, step=100.0)
+domestic_trucking_usd = domestic_trucking_rmb * effective_usd_rate
+
+st.markdown("🚢 **第二段：起运港杂费与海运费**")
 mode = st.radio("运输模式", ["整柜 (FCL)", "散货 (LCL)"], horizontal=True)
 
 total_pol_usd = 0.0
@@ -115,6 +119,7 @@ if mode == "整柜 (FCL)":
     pol_fixed = POL_FEES_USD["fixed_per_bl"]
     pol_variable = sum(POL_FEES_USD[ctype].values())
     total_pol_usd = pol_fixed + pol_variable + (60 if has_inspect else 0)
+    st.caption(f"*(系统已匹配港口杂费: ${total_pol_usd})*")
 
 else:
     l1, l2, l3 = st.columns(3)
@@ -146,14 +151,14 @@ d1, d2, d3, d4 = st.columns(4)
 with d1:
     import_tax = st.number_input("进口关税 (%)", value=0.0)
 with d2:
-    import_vat = st.number_input("货物进口增值税 (%)", value=8.0)
+    # 🌟 修改点 1：默认值从 8.0 改为 0.0
+    import_vat = st.number_input("货物进口增值税 (%)", value=0.0)
 with d3:
-    customs_tip_vnd = st.number_input("海关查验/小费 (VND)", value=1000000, step=500000)
+    # 🌟 修改点 2：默认值从 1000000 改为 0
+    customs_tip_vnd = st.number_input("海关查验/小费 (VND)", value=0, step=500000)
 with d4:
-    # 🌟 修改点 1：变更为 港口-仓库拖车费用 (USD)
     delivery_truck_usd = st.number_input("港口-仓库拖车费用 (USD)", value=107.0)
 
-# 仓储与末端派送模块
 st.markdown("🏢 **海外仓配与末端派送**")
 w1, w2, w3 = st.columns(3)
 with w1:
@@ -161,8 +166,8 @@ with w1:
 with w2:
     storage_days = st.number_input("预计存储天数", value=7, min_value=0) if needs_warehousing else 0
 with w3:
-    # 🌟 修改点 2：新增越南本土运费（仓库-客户），使用 VND 录入
-    vn_delivery_to_client_vnd = st.number_input("越南本土运费 (仓库-客户, VND)", value=2000000, step=500000)
+    # 🌟 修改点 3：默认值从 2000000 改为 0
+    vn_delivery_to_client_vnd = st.number_input("越南本土运费 (仓库-客户, VND)", value=0, step=500000)
 
 warehouse_total_vnd = 0
 if needs_warehousing:
@@ -170,7 +175,6 @@ if needs_warehousing:
     handling_rate = WAREHOUSE_RATES["handling_pallet"] if "托盘" in packing else WAREHOUSE_RATES["handling_loose"]
     handling_fee_vnd = handling_rate * tonnage * 2 
     warehouse_total_vnd = storage_fee_vnd + handling_fee_vnd
-    st.caption(f"*(明细: 仓储费 ₫{storage_fee_vnd:,.0f} + 双边装卸费 ₫{handling_fee_vnd:,.0f})*")
 
 st.divider()
 
@@ -179,28 +183,25 @@ st.divider()
 # ==========================================
 if st.button("🚀 一键生成精准报价表", use_container_width=True, type="primary"):
     
-    # 1. 货值计算 (退税后真实成本)
+    # 1. 货值计算
     total_goods_cost_usd = (cost_per_ton_rmb * tonnage) * effective_usd_rate
     
-    # 2. CIF 计算 (货值 + 中国杂费 + 海运费 + 资金成本) / 扣减保险
+    # 2. CIF 计算 
     insurance_rate = 0.0008 
-    total_cif_usd = (total_goods_cost_usd + total_pol_usd + ocean_freight_usd + total_capital_cost_usd) / (1 - (insurance_rate * 1.1))
+    total_cif_usd = (total_goods_cost_usd + domestic_trucking_usd + total_pol_usd + ocean_freight_usd + total_capital_cost_usd) / (1 - (insurance_rate * 1.1))
     
     # 利润加成
     cif_quote_total_usd = total_cif_usd * (1 + profit_margin/100) * (1 + loss_rate/100)
     cif_quote_per_ton = cif_quote_total_usd / tonnage
 
-    # 3. DDP 费用计算 (转换为 VND)
+    # 3. DDP 费用计算
     usd_to_vnd = effective_vnd_rate / effective_usd_rate
     cif_vnd = total_cif_usd * usd_to_vnd
     
     duty_vnd = cif_vnd * (import_tax / 100)
     vat_on_goods_vnd = (cif_vnd + duty_vnd) * (import_vat / 100)
     
-    # 头程本地拖车 (港口到仓库)
     local_delivery_port_to_wh_vnd = delivery_truck_usd * usd_to_vnd
-    
-    # 🌟 修改点 3：目的港本地成本汇总 加入了 vn_delivery_to_client_vnd (仓库到客户)
     total_pod_costs_vnd = pod_fees_vnd_no_tax + pod_fees_vat_vnd + customs_tip_vnd + warehouse_total_vnd + local_delivery_port_to_wh_vnd + vn_delivery_to_client_vnd
     
     # 最终 DDP
@@ -209,7 +210,7 @@ if st.button("🚀 一键生成精准报价表", use_container_width=True, type=
     ddp_quote_per_kg = ddp_quote_total_vnd / (tonnage * 1000)
 
     # 结果展示
-    st.success("✅ 数据核算完毕！各项本地费用及垫资利息已计入总成本。")
+    st.success("✅ 数据核算完毕！中国境内物流费已计入总成本。")
     
     res1, res2 = st.columns(2)
     with res1:
@@ -223,13 +224,14 @@ if st.button("🚀 一键生成精准报价表", use_container_width=True, type=
         st.markdown(f"**总价:** `₫ {ddp_quote_total_vnd:,.0f}`")
         
     st.markdown("---")
-    st.markdown("### 📊 DDP 成本透视 (内部参考)")
+    st.markdown("### 📊 全链路成本透视 (内部参考)")
     col_t1, col_t2, col_t3, col_t4 = st.columns(4)
-    col_t1.metric("1. 基础货值 (含垫资利息)", f"₫ {cif_vnd:,.0f}")
-    col_t2.metric("2. 国家税费 (关税+VAT)", f"₫ {(duty_vnd + vat_on_goods_vnd):,.0f}")
     
-    # 特别标明本地物流已经包含了“双重”拖车费
-    col_t3.metric("3. 越南本地物流总计", f"₫ {total_pod_costs_vnd:,.0f}")
+    col_t1.metric("1. 基础货值与垫资利息", f"₫ {cif_vnd:,.0f}")
+    col_t2.metric("2. 中国起运段 (拖车+港杂+海运)", f"${(domestic_trucking_usd + total_pol_usd + ocean_freight_usd):,.0f}")
+    col_t3.metric("3. 越南落地与税费总计", f"₫ {(duty_vnd + vat_on_goods_vnd + total_pod_costs_vnd):,.0f}")
     col_t4.metric("4. 单票占用资金利息", f"₫ {(total_capital_cost_usd * usd_to_vnd):,.0f}")
-    
-    st.caption(f"🔧 **越南本地物流拆解：** 目的港标准杂费及小费 + 本地仓储费(₫{warehouse_total_vnd:,.0f}) + 港口到仓拖车费 + 仓到客户运费(₫{vn_delivery_to_client_vnd:,.0f})")
+
+    st.caption(f"🔧 **物流链路拆解：** \n"
+               f"🇨🇳 中国段：工厂提货(¥{domestic_trucking_rmb}) + 起运港杂费(${total_pol_usd}) + 海运(${ocean_freight_usd}) \n"
+               f"🇻🇳 越南段：目的港杂费及小费 + 仓储(₫{warehouse_total_vnd:,.0f}) + 港口到仓 + 仓到客户派送(₫{vn_delivery_to_client_vnd:,.0f})")
